@@ -60,7 +60,11 @@ import {
   Scissors,
   Timer,
   Pause,
-  Users
+  Users,
+  Maximize,
+  Minimize,
+  MonitorSmartphone,
+  ArrowUpDown
 } from "lucide-react";
 
 // Helper function to split a Khmer word into linguistic graphemes (syllables/letters)
@@ -309,6 +313,32 @@ const toKhmerNumeral = (n: number | string): string => {
 import { BUILT_IN_FRAMES } from "./frames";
 
 export default function App() {
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const promptInstall = async () => {
+    playClickSound(soundEnabled);
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setDeferredPrompt(null);
+      }
+    }
+  };
+
   // Config state
   const [challenges, setChallenges] = useState<WordPuzzle[]>(() => {
     return shuffleArray(PRESET_CHALLENGES).map(c => applyPrefilledRule(c, "easy"));
@@ -450,6 +480,47 @@ export default function App() {
   const [isTeamGenEditOpen, setIsTeamGenEditOpen] = useState<boolean>(false);
   const [teamCount, setTeamCount] = useState<number>(2);
   const [generatedTeams, setGeneratedTeams] = useState<string[][]>([]);
+
+  // Slot Machine State
+  const [isSlotMachineOpen, setIsSlotMachineOpen] = useState<boolean>(false);
+  const [slotMachineSpinning, setSlotMachineSpinning] = useState<boolean>(false);
+  const [slotMachineWord, setSlotMachineWord] = useState<string>("");
+  const [slotMachineWinner, setSlotMachineWinner] = useState<string | null>(null);
+
+  const startSlotMachine = () => {
+    if (studentList.length === 0) return;
+    setSlotMachineWinner(null);
+    setSlotMachineSpinning(true);
+    let counter = 0;
+    const maxTblTicks = 35 + Math.floor(Math.random() * 20); // 35 to 55 ticks
+    let currentSpeed = 50;
+    
+    const tick = () => {
+       setSlotMachineWord(studentList[Math.floor(Math.random() * studentList.length)]);
+       counter++;
+       
+       if (counter < 20) {
+           currentSpeed = 40;
+       } else if (counter < 35) {
+           currentSpeed += 15;
+       } else if (counter < maxTblTicks) {
+           currentSpeed += 30;
+       }
+       
+       if (counter >= maxTblTicks) {
+            const winner = studentList[Math.floor(Math.random() * studentList.length)];
+            setSlotMachineWinner(winner);
+            setSlotMachineWord(winner);
+            setSlotMachineSpinning(false);
+            playSuccessSound(soundEnabled);
+       } else {
+            if (soundEnabled && counter % 2 === 0) playTickSound(); 
+            setTimeout(tick, currentSpeed);
+       }
+    };
+    
+    tick();
+  };
 
   const applyTeamGenEdit = () => {
     const names = studentInput.split("\n").map(n => n.trim()).filter(n => n !== "");
@@ -724,6 +795,17 @@ export default function App() {
       currentAngleRef.current = 0;
       setIsLuckyBoxSettingsOpen(false);
       setTimeout(drawWheel, 50);
+    }
+  };
+
+  const removeSlotMachineWinner = () => {
+    if (slotMachineWinner) {
+      const newList = studentList.filter(s => s !== slotMachineWinner);
+      setStudentList(newList);
+      setStudentInput(newList.join("\n"));
+      setSlotMachineWinner(null);
+      setSlotMachineWord("");
+      playClickSound(soundEnabled);
     }
   };
 
@@ -2068,6 +2150,18 @@ export default function App() {
           <button 
             onClick={() => {
               playClickSound(soundEnabled);
+              setIsSlotMachineOpen(true);
+            }}
+            className="px-3 py-2 text-sm font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+            title="ម៉ាស៊ីនចាប់ពាក្យ (Slot)"
+          >
+            <ArrowUpDown className="w-4 h-4 text-indigo-600" />
+            <span className="hidden sm:inline">ចាប់ញាប់</span>
+          </button>
+
+          <button 
+            onClick={() => {
+              playClickSound(soundEnabled);
               setIsTeamGenOpen(true);
             }}
             className="px-3 py-2 text-sm font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
@@ -2075,6 +2169,15 @@ export default function App() {
           >
             <Users className="w-4 h-4 text-sky-600" />
             <span className="hidden sm:inline">ចាប់ក្រុម</span>
+          </button>
+
+          <button 
+            onClick={toggleFullscreenMode}
+            className="p-2 sm:px-3 sm:py-2 text-sm font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-1.5 transition-all shadow-sm"
+            title={isFullscreen ? "បិទពេញអេក្រង់" : "ពេញអេក្រង់"}
+          >
+            {isFullscreen ? <Minimize className="w-4 h-4 text-slate-600" /> : <Maximize className="w-4 h-4 text-slate-600" />}
+            <span className="hidden sm:inline">{isFullscreen ? "ធម្មតា" : "ពេញអេក្រង់"}</span>
           </button>
 
           <div className="relative">
@@ -2913,6 +3016,266 @@ export default function App() {
         </div>
       )}
 
+      {/* Slot Machine Modal */}
+      {isSlotMachineOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-white animate-in fade-in duration-300">
+          <div className="w-full h-full relative flex flex-col items-center justify-center overflow-hidden">
+            {/* Top Toolbar */}
+            <div className="absolute top-4 left-4 right-4 z-[110] flex items-center justify-between">
+              <div className="flex items-center gap-2 bg-slate-50 px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
+                <ArrowUpDown className="w-5 h-5 text-indigo-500" />
+                <span className="font-bold text-slate-700">ចាប់ញាប់ (Slot)</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    playClickSound(soundEnabled);
+                    setIsLuckyBoxListOpen(true);
+                  }}
+                  className="p-3 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 shadow-sm transition-all active:scale-95 flex items-center gap-2"
+                >
+                  <List className="w-5 h-5 text-indigo-500" />
+                  <span className="hidden sm:inline font-bold">បញ្ជីឈ្មោះ</span>
+                </button>
+                <button 
+                  onClick={() => {
+                    playClickSound(soundEnabled);
+                    setIsLuckyBoxSettingsOpen(true);
+                  }}
+                  className="p-3 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 shadow-sm transition-all active:scale-95 flex items-center gap-2"
+                >
+                  <Settings className="w-5 h-5 text-amber-500" />
+                  <span className="hidden sm:inline font-bold">ការកំណត់</span>
+                </button>
+                <button 
+                  onClick={() => setIsSlotMachineOpen(false)}
+                  className="p-3 rounded-2xl bg-white hover:bg-rose-50 border border-slate-200 text-slate-400 hover:text-rose-500 shadow-sm transition-all active:scale-95"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-grow flex flex-col items-center justify-center w-full max-w-2xl mt-16 px-4">
+              {studentList.length === 0 ? (
+                <div className="text-center p-8 bg-amber-50 rounded-2xl border border-amber-200 text-amber-700 w-full mb-8">
+                  <p className="font-bold mb-2">បញ្ជីឈ្មោះទទេ!</p>
+                  <p className="text-sm">សូមបញ្ចូលឈ្មោះសិស្សក្នុងចំណុច "បញ្ជីឈ្មោះ" ជាមុនសិន។</p>
+                </div>
+              ) : (
+                <div className="w-full flex flex-col items-center gap-8 mb-16">
+                  <div className="w-48 h-48 md:w-64 md:h-64 bg-indigo-50/50 rounded-[3rem] md:rounded-[4rem] flex items-center justify-center mb-4 border-[8px] border-indigo-100/50 shadow-inner">
+                     <ArrowUpDown className="w-24 h-24 md:w-32 md:h-32 text-indigo-300 transform -rotate-12" />
+                  </div>
+
+                  <button
+                    onClick={startSlotMachine}
+                    disabled={slotMachineSpinning || studentList.length === 0}
+                    className="w-full max-w-sm flex text-2xl md:text-3xl items-center justify-center gap-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-6 px-8 rounded-[2.5rem] shadow-[0_12px_40px_rgba(0,0,0,0.18)] transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none disabled:transform-none mt-8 group"
+                  >
+                    <ArrowUpDown className="w-8 h-8 md:w-10 md:h-10 group-hover:scale-110 transition-transform" />
+                    ចាប់ញាប់ (Start)
+                  </button>
+                  
+                  <p className="text-center text-slate-500 text-base md:text-lg font-bold mt-4">
+                    មានឈ្មោះសរុប <span className="font-extrabold text-indigo-600">{studentList.length}</span> ក្នុងបញ្ជី
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* Winner and Spinning Modal Backdrop Overlay */}
+          {(slotMachineSpinning || slotMachineWinner) && (
+            <div className="absolute inset-0 z-[120] bg-slate-900/60 backdrop-blur-md flex items-center justify-center animate-in fade-in duration-300 pointer-events-auto">
+               <div className="bg-white rounded-[40px] shadow-2xl p-8 md:p-12 max-w-[95vw] md:max-w-6xl w-full mx-4 transform animate-in zoom-in bounce-in duration-300 text-center relative overflow-hidden flex flex-col">
+                  <div className="absolute top-0 left-0 w-full h-3 bg-indigo-500" />
+                  
+                  <div className="w-24 h-24 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6 shrink-0">
+                      <Trophy className={`w-12 h-12 text-amber-500 ${slotMachineSpinning ? 'animate-bounce' : ''}`} />
+                  </div>
+                  <h3 className="text-xl md:text-2xl font-bold text-slate-400 mb-6 uppercase tracking-widest shrink-0">
+                    {slotMachineSpinning ? 'កំពុងចាប់...' : 'ពាក្យរបស់អ្នកគឺ'}
+                  </h3>
+                  
+                  <div className="bg-indigo-50/50 border border-indigo-100/50 rounded-[32px] p-8 md:p-16 mb-8 shadow-inner flex-grow flex items-center justify-center min-h-[16rem]">
+                    <p 
+                      key={`${slotMachineWord}-${slotMachineSpinning ? 'spin' : 'stop'}`}
+                      className={`text-5xl md:text-7xl lg:text-8xl xl:text-[7rem] font-black font-khmer text-indigo-600 break-words leading-tight px-4 drop-shadow-sm ${slotMachineSpinning ? 'animate-in fade-in slide-in-from-top-2 duration-75' : 'animate-in zoom-in-75 duration-300 scale-110'}`}
+                    >
+                      {slotMachineSpinning ? slotMachineWord : slotMachineWinner}
+                    </p>
+                  </div>
+                  
+                  {!slotMachineSpinning && slotMachineWinner && (
+                    <div className="flex flex-col gap-3 w-full max-w-lg mx-auto px-2 shrink-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                      <button 
+                        onClick={removeSlotMachineWinner}
+                        className="w-full bg-rose-50 text-rose-600 border border-rose-100 font-bold py-4 md:py-5 px-6 rounded-2xl md:rounded-3xl hover:bg-rose-100 transition-all flex items-center justify-center gap-3 active:scale-95 text-lg md:text-xl"
+                      >
+                        <UserMinus className="w-6 h-6 md:w-7 md:h-7" />
+                        ដកចេញពីបញ្ជី
+                      </button>
+                      <button 
+                        onClick={() => setSlotMachineWinner(null)}
+                        className="w-full bg-slate-900 border border-slate-900 text-white font-bold py-4 md:py-5 px-6 rounded-2xl md:rounded-3xl hover:bg-slate-800 transition-all active:scale-95 mt-2 text-lg md:text-xl"
+                      >
+                        បិទ
+                      </button>
+                    </div>
+                  )}
+                  
+               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Lucky Box and Slot Machine Lists / Settings Modals (Shared) */}
+      {isLuckyBoxListOpen && (
+        <div className="fixed inset-0 z-[120] bg-white/95 backdrop-blur-xl animate-in slide-in-from-left duration-300 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-2xl rounded-[40px] shadow-2xl border border-slate-100 flex flex-col p-8 animate-in zoom-in-95 duration-200">
+             <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-indigo-100 rounded-2xl flex items-center justify-center">
+                    <List className="w-7 h-7 text-indigo-600" />
+                  </div>
+                  <h3 className="text-2xl font-black text-slate-800">បញ្ជីឈ្មោះសម្រាប់បង្វិល</h3>
+                </div>
+                <button 
+                  onClick={() => setIsLuckyBoxListOpen(false)} 
+                  className="p-3 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-all"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+             </div>
+
+             <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-6 ml-1">បញ្ចូលដោយដៃ ឬជ្រើសរើសពីបញ្ជី</p>
+             
+             <div className="mb-6 space-y-4">
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm font-bold text-slate-600 ml-1 flex items-center gap-2">
+                    <ChevronDown className="w-4 h-4 text-indigo-400" />
+                    ជ្រើសរើសតាមប្រភេទ (Select Category)
+                  </label>
+                  <select 
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "all") {
+                        setStudentInput(challenges.map(c => c.word).join("\n"));
+                      } else if (val !== "") {
+                        const filtered = challenges.filter(c => (c.category || "ពាក្យដែលបានបញ្ចូល") === val);
+                        setStudentInput(filtered.map(c => c.word).join("\n"));
+                      }
+                      playClickSound(soundEnabled);
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-700 font-bold focus:outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="">-- សូមជ្រើសរើសក្រុមពាក្យ --</option>
+                    <option value="all">🔍 បង្ហាញទាំងអស់ ({challenges.length} ពាក្យ)</option>
+                    <optgroup label="ក្រុមពាក្យដែលបានបញ្ចូល (Entered Groups)">
+                      {Array.from(new Set(challenges.map(c => c.category || "ពាក្យដែលបានបញ្ចូល"))).map((catName) => (
+                        <option key={catName} value={catName}>📁 {catName} ({challenges.filter(c => (c.category || "ពាក្យដែលបានបញ្ចូល") === catName).length} ពាក្យ)</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between ml-1">
+                    <label className="text-sm font-bold text-slate-600 flex items-center gap-2">
+                      <PlusCircle className="w-4 h-4 text-emerald-500" />
+                      បញ្ជីឈ្មោះ/ពាក្យ (Manual Input)
+                    </label>
+                    <div>
+                      <input 
+                        type="file" 
+                        accept=".xlsx, .xls" 
+                        onChange={handleStudentImport} 
+                        style={{ display: "none" }} 
+                        id="student-excel-upload-luckybox" 
+                      />
+                      <label 
+                        htmlFor="student-excel-upload-luckybox" 
+                        className="cursor-pointer bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 transition-all border border-emerald-200"
+                      >
+                        <Download className="w-4 h-4" />
+                        ទាញចូលពី Excel
+                      </label>
+                    </div>
+                  </div>
+                  <textarea 
+                    value={studentInput}
+                    onChange={(e) => setStudentInput(e.target.value)}
+                    placeholder="បញ្ចូលឈ្មោះសិស្ស ឬពាក្យក្នុងមួយជួរ..."
+                    className="h-64 bg-slate-50 border border-slate-200 rounded-3xl p-6 text-xl focus:outline-none focus:ring-4 focus:ring-indigo-500/10 resize-none shadow-inner leading-relaxed text-slate-700 font-khmer transition-all"
+                  />
+                </div>
+             </div>
+
+            <button 
+              onClick={() => {
+                updateStudentList();
+                setIsLuckyBoxListOpen(false);
+                playSuccessSound(soundEnabled);
+              }}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-4.5 rounded-3xl shadow-xl shadow-indigo-100 transition-all active:scale-95 flex items-center justify-center gap-3 text-lg"
+            >
+              <RotateCcw className="w-6 h-6" />
+              យល់ព្រមតាមការជ្រើសរើស
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isLuckyBoxSettingsOpen && (
+        <div className="fixed inset-0 z-[120] bg-white/95 backdrop-blur-xl animate-in fade-in duration-300 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-[40px] shadow-2xl border border-slate-100 flex flex-col p-8 animate-in zoom-in-95 duration-200">
+             <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center">
+                    <Settings className="w-7 h-7 text-amber-600" />
+                  </div>
+                  <h3 className="text-2xl font-black text-slate-800">ការកំណត់</h3>
+                </div>
+                <button 
+                  onClick={() => setIsLuckyBoxSettingsOpen(false)} 
+                  className="p-3 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-all"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+             </div>
+             
+             <div className="space-y-8">
+               {/* Font Size */}
+               <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 shadow-inner">
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="font-bold text-slate-700">ទំហំអក្សរឈ្មោះ</span>
+                    <span className="text-indigo-600 font-black bg-white px-3 py-1 rounded-xl border border-indigo-100">{wheelFontSize}px</span>
+                  </div>
+                  <input 
+                    type="range" min="8" max="48" value={wheelFontSize}
+                    onChange={(e) => setWheelFontSize(parseInt(e.target.value))}
+                    className="w-full h-3 bg-white border border-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  />
+                  <div className="flex justify-between mt-2 text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                    <span>តូច</span>
+                    <span>ធំ</span>
+                  </div>
+               </div>
+             </div>
+
+             <button 
+              onClick={() => setIsLuckyBoxSettingsOpen(false)} 
+              className="mt-10 w-full bg-slate-900 text-white font-black py-4.5 rounded-2xl transition-all active:scale-95 shadow-lg shadow-slate-100"
+             >
+               យល់ព្រម
+             </button>
+          </div>
+        </div>
+      )}
+
       {/* Team Generator Modal */}
       {isTeamGenOpen && (
         <div className="fixed inset-0 z-[115] flex items-center justify-center bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-200 p-4">
@@ -3120,150 +3483,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Lucky Box List Modal */}
-            {isLuckyBoxListOpen && (
-              <div className="absolute inset-0 z-[120] bg-white/95 backdrop-blur-xl animate-in slide-in-from-left duration-300 flex items-center justify-center p-4">
-                <div className="bg-white w-full max-w-2xl rounded-[40px] shadow-2xl border border-slate-100 flex flex-col p-8 animate-in zoom-in-95 duration-200">
-                   <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 bg-indigo-100 rounded-2xl flex items-center justify-center">
-                          <List className="w-7 h-7 text-indigo-600" />
-                        </div>
-                        <h3 className="text-2xl font-black text-slate-800">បញ្ជីឈ្មោះសម្រាប់បង្វិល</h3>
-                      </div>
-                      <button 
-                        onClick={() => setIsLuckyBoxListOpen(false)} 
-                        className="p-3 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-all"
-                      >
-                        <X className="w-6 h-6" />
-                      </button>
-                   </div>
-
-                   <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-6 ml-1">បញ្ចូលដោយដៃ ឬជ្រើសរើសពីបញ្ជី</p>
-                   
-                   <div className="mb-6 space-y-4">
-                      <div className="flex flex-col gap-2">
-                        <label className="text-sm font-bold text-slate-600 ml-1 flex items-center gap-2">
-                          <ChevronDown className="w-4 h-4 text-indigo-400" />
-                          ជ្រើសរើសតាមប្រភេទ (Select Category)
-                        </label>
-                        <select 
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (val === "all") {
-                              setStudentInput(challenges.map(c => c.word).join("\n"));
-                            } else if (val !== "") {
-                              const filtered = challenges.filter(c => (c.category || "ពាក្យដែលបានបញ្ចូល") === val);
-                              setStudentInput(filtered.map(c => c.word).join("\n"));
-                            }
-                            playClickSound(soundEnabled);
-                          }}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-700 font-bold focus:outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all appearance-none cursor-pointer"
-                        >
-                          <option value="">-- សូមជ្រើសរើសក្រុមពាក្យ --</option>
-                          <option value="all">🔍 បង្ហាញទាំងអស់ ({challenges.length} ពាក្យ)</option>
-                          <optgroup label="ក្រុមពាក្យដែលបានបញ្ចូល (Entered Groups)">
-                            {Array.from(new Set(challenges.map(c => c.category || "ពាក្យដែលបានបញ្ចូល"))).map((catName) => (
-                              <option key={catName} value={catName}>📁 {catName} ({challenges.filter(c => (c.category || "ពាក្យដែលបានបញ្ចូល") === catName).length} ពាក្យ)</option>
-                            ))}
-                          </optgroup>
-                        </select>
-                      </div>
-
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between ml-1">
-                          <label className="text-sm font-bold text-slate-600 flex items-center gap-2">
-                            <PlusCircle className="w-4 h-4 text-emerald-500" />
-                            បញ្ជីឈ្មោះ/ពាក្យ (Manual Input)
-                          </label>
-                          <div>
-                            <input 
-                              type="file" 
-                              accept=".xlsx, .xls" 
-                              onChange={handleStudentImport} 
-                              style={{ display: "none" }} 
-                              id="student-excel-upload-luckybox" 
-                            />
-                            <label 
-                              htmlFor="student-excel-upload-luckybox" 
-                              className="cursor-pointer bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 transition-all border border-emerald-200"
-                            >
-                              <Download className="w-4 h-4" />
-                              ទាញចូលពី Excel
-                            </label>
-                          </div>
-                        </div>
-                        <textarea 
-                          value={studentInput}
-                          onChange={(e) => setStudentInput(e.target.value)}
-                          placeholder="បញ្ចូលឈ្មោះសិស្ស ឬពាក្យក្នុងមួយជួរ..."
-                          className="h-64 bg-slate-50 border border-slate-200 rounded-3xl p-6 text-xl focus:outline-none focus:ring-4 focus:ring-indigo-500/10 resize-none shadow-inner leading-relaxed text-slate-700 font-khmer transition-all"
-                        />
-                      </div>
-                   </div>
-
-                  <button 
-                    onClick={() => {
-                      updateStudentList();
-                      setIsLuckyBoxListOpen(false);
-                      playSuccessSound(soundEnabled);
-                    }}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-4.5 rounded-3xl shadow-xl shadow-indigo-100 transition-all active:scale-95 flex items-center justify-center gap-3 text-lg"
-                  >
-                    <RotateCcw className="w-6 h-6" />
-                    យល់ព្រមតាមការជ្រើសរើស
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Lucky Box Settings Overlay */}
-            {isLuckyBoxSettingsOpen && (
-              <div className="absolute inset-0 z-[120] bg-white/95 backdrop-blur-xl animate-in fade-in duration-300 flex items-center justify-center p-4">
-                <div className="bg-white w-full max-w-md rounded-[40px] shadow-2xl border border-slate-100 flex flex-col p-8 animate-in zoom-in-95 duration-200">
-                   <div className="flex items-center justify-between mb-8">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center">
-                          <Settings className="w-7 h-7 text-amber-600" />
-                        </div>
-                        <h3 className="text-2xl font-black text-slate-800">ការកំណត់</h3>
-                      </div>
-                      <button 
-                        onClick={() => setIsLuckyBoxSettingsOpen(false)} 
-                        className="p-3 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-all"
-                      >
-                        <X className="w-6 h-6" />
-                      </button>
-                   </div>
-                   
-                   <div className="space-y-8">
-                     {/* Font Size */}
-                     <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 shadow-inner">
-                        <div className="flex justify-between items-center mb-4">
-                          <span className="font-bold text-slate-700">ទំហំអក្សរឈ្មោះ</span>
-                          <span className="text-indigo-600 font-black bg-white px-3 py-1 rounded-xl border border-indigo-100">{wheelFontSize}px</span>
-                        </div>
-                        <input 
-                          type="range" min="8" max="48" value={wheelFontSize}
-                          onChange={(e) => setWheelFontSize(parseInt(e.target.value))}
-                          className="w-full h-3 bg-white border border-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                        />
-                        <div className="flex justify-between mt-2 text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                          <span>តូច</span>
-                          <span>ធំ</span>
-                        </div>
-                     </div>
-                   </div>
- 
-                   <button 
-                    onClick={() => setIsLuckyBoxSettingsOpen(false)} 
-                    className="mt-10 w-full bg-slate-900 text-white font-black py-4.5 rounded-2xl transition-all active:scale-95 shadow-lg shadow-slate-100"
-                   >
-                     យល់ព្រម
-                   </button>
-                </div>
-              </div>
-            )}
 
             {/* Main Wheel Area */}
             <div className="w-full h-full flex flex-col items-center justify-center p-4 pt-16">
@@ -3315,17 +3534,17 @@ export default function App() {
           {/* Winner Modal Backdrop Overlay */}
           {winningStudent && !isSpinning && (
             <div className="fixed inset-0 z-[110] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-300 pointer-events-auto">
-               <div className="bg-white rounded-[40px] shadow-2xl p-10 max-w-4xl w-full mx-4 transform animate-in zoom-in bounce-in duration-500 text-center relative overflow-hidden">
+               <div className="bg-white rounded-[40px] shadow-2xl p-10 max-w-[95vw] md:max-w-6xl w-full mx-4 transform animate-in zoom-in bounce-in duration-500 text-center relative overflow-hidden flex flex-col">
                   <div className="absolute top-0 left-0 w-full h-2 bg-indigo-500" />
-                  <div className="w-24 h-24 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <div className="w-24 h-24 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6 shrink-0">
                       <Trophy className="w-12 h-12 text-amber-500" />
                   </div>
-                  <h3 className="text-xl font-bold text-slate-400 mb-4 uppercase tracking-widest">អ្នកឈ្នះគឺ</h3>
-                  <div className="bg-indigo-50/50 border border-indigo-100/50 rounded-[32px] p-8 mb-8 shadow-inner">
-                    <p className="text-5xl md:text-8xl font-black text-indigo-600 break-words leading-tight px-2 drop-shadow-sm">{winningStudent}</p>
+                  <h3 className="text-xl font-bold text-slate-400 mb-4 uppercase tracking-widest shrink-0">ពាក្យរបស់អ្នកគឺ</h3>
+                  <div className="bg-indigo-50/50 border border-indigo-100/50 rounded-[32px] p-8 mb-8 shadow-inner flex-grow flex items-center justify-center min-h-[16rem]">
+                    <p className="text-5xl md:text-7xl lg:text-8xl xl:text-[7rem] font-black text-indigo-600 break-words leading-tight px-4 drop-shadow-sm animate-in zoom-in-75 duration-300  scale-110">{winningStudent}</p>
                   </div>
                   
-                  <div className="flex flex-col gap-3 w-full px-2">
+                  <div className="flex flex-col gap-3 w-full max-w-lg mx-auto px-2 shrink-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
                     <button 
                       onClick={removeWinningStudent}
                       className="w-full bg-rose-50 text-rose-600 border border-rose-100 font-bold py-4 px-6 rounded-2xl hover:bg-rose-100 transition-all flex items-center justify-center gap-2 active:scale-95"
@@ -3355,6 +3574,16 @@ export default function App() {
           
           {/* Quick Settings Floating for Homepage */}
           <div className="absolute top-0 right-0 p-2 flex items-center gap-2">
+            {deferredPrompt && (
+              <button 
+                onClick={promptInstall}
+                className="p-3 rounded-2xl border border-sky-200 bg-sky-50 text-sky-600 hover:bg-sky-100 transition-all shadow-sm active:scale-95 flex items-center gap-2 font-bold"
+                title="ដំឡើងកម្មវិធី"
+              >
+                <MonitorSmartphone className="w-5 h-5" />
+                <span className="hidden sm:inline">ដំឡើង</span>
+              </button>
+            )}
             <button 
               onClick={() => setSoundEnabled(!soundEnabled)}
               className="p-3 rounded-2xl border border-slate-200 bg-white/70 backdrop-blur-md text-slate-600 hover:bg-white transition-all shadow-sm active:scale-95"
@@ -3549,6 +3778,24 @@ export default function App() {
                 <div>
                   <h3 className="text-sm md:text-lg font-extrabold text-slate-800">ចាប់ក្រុមសិស្ស</h3>
                   <p className="hidden md:block text-[11px] text-slate-500 mt-1">បែងចែកក្រុមដោយស្វ័យប្រវត្តិ</p>
+                </div>
+              </button>
+
+              {/* Card 9: Slot Machine */}
+              <button 
+                type="button"
+                onClick={() => {
+                  playClickSound(soundEnabled);
+                  setIsSlotMachineOpen(true);
+                }}
+                className="bg-white/80 hover:bg-white border-2 border-slate-200/60 hover:border-indigo-400 rounded-3xl p-4 md:p-6 flex flex-col items-center justify-center gap-3 text-center cursor-pointer transition-all hover:-translate-y-1 hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)] group backdrop-blur-sm"
+              >
+                <div className="w-12 h-12 md:w-16 md:h-16 bg-indigo-50 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform group-hover:-rotate-3">
+                  <ArrowUpDown className="w-6 h-6 md:w-9 md:h-9 text-indigo-500" />
+                </div>
+                <div>
+                  <h3 className="text-sm md:text-lg font-extrabold text-slate-800">ចាប់ញាប់ (Slot)</h3>
+                  <p className="hidden md:block text-[11px] text-slate-500 mt-1">ជ្រើសរើសចៃដន្យបែប Slot</p>
                 </div>
               </button>
             </div>

@@ -17,6 +17,8 @@ export default defineConfig(() => {
           short_name: 'កម្មវិធីសិក្សា',
           description: 'កម្មវិធីសិក្សា និងបង្រៀន',
           theme_color: '#ffffff',
+          background_color: '#ffffff',
+          display: 'standalone',
           icons: [
             {
               src: 'pwa-192x192.png',
