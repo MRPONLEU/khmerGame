@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import * as XLSX from "xlsx";
 import { 
   PRESET_CHALLENGES, 
@@ -310,6 +311,13 @@ const toKhmerNumeral = (n: number | string): string => {
   return n.toString().split("").map(digit => khmerDigits[parseInt(digit)] || digit).join("");
 };
 
+const formatTimeHHMMSS = (totalSeconds: number): string => {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+};
+
 import { BUILT_IN_FRAMES } from "./frames";
 
 export default function App() {
@@ -413,6 +421,9 @@ export default function App() {
   // Print worksheet states
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
   const [studentName, setStudentName] = useState<string>("");
+  const [printTrigger, setPrintTrigger] = useState<number>(0);
+  const [wordSearchPrintPages, setWordSearchPrintPages] = useState<number>(1);
+  const [wordSearchPrintGrids, setWordSearchPrintGrids] = useState<{grid: string[][], placements: Record<string, {r:number, c:number}[]>, placedWords?: string[]}[]>([]);
   
   // Certificate states
   const [certificateName, setCertificateName] = useState<string>("អាទិត្យ វីរៈ");
@@ -428,31 +439,39 @@ export default function App() {
   const [timerSeconds, setTimerSeconds] = useState<number>(300); // Default 5 mins (300s)
   const [timerRunning, setTimerRunning] = useState<boolean>(false);
   const [timerMaxSeconds, setTimerMaxSeconds] = useState<number>(300); // For resetting and progress bar
-  const [timerInputStr, setTimerInputStr] = useState<string>("05:00");
+  const [timerInputStr, setTimerInputStr] = useState<string>("00:05:00");
+
+  const timerSecondsRef = useRef(timerSeconds);
+  useEffect(() => {
+    timerSecondsRef.current = timerSeconds;
+  }, [timerSeconds]);
 
   // Timer Effect
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (timerRunning) {
       if (timerCountUp) {
+        const startTime = Date.now() - (timerSecondsRef.current * 1000);
         interval = setInterval(() => {
-          setTimerSeconds(prev => prev + 1);
-        }, 1000);
+          const elapsed = (Date.now() - startTime) / 1000;
+          setTimerSeconds(elapsed);
+        }, 10);
       } else {
-        if (timerSeconds > 0) {
-          interval = setInterval(() => {
-            setTimerSeconds(prev => prev - 1);
-          }, 1000);
-        } else if (timerSeconds === 0) {
-          setTimerRunning(false);
-          playCompleteSound(soundEnabled);
-        }
+        const startTime = Date.now() + (timerSecondsRef.current * 1000);
+        interval = setInterval(() => {
+          const remaining = Math.max(0, (startTime - Date.now()) / 1000);
+          setTimerSeconds(remaining);
+          if (remaining <= 0) {
+            setTimerRunning(false);
+            playCompleteSound(soundEnabled);
+          }
+        }, 100);
       }
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [timerRunning, timerSeconds, timerCountUp, soundEnabled]);
+  }, [timerRunning, timerCountUp, soundEnabled]);
   
   // Lucky Box State
   const [isLuckyBoxOpen, setIsLuckyBoxOpen] = useState<boolean>(false);
@@ -1130,24 +1149,53 @@ export default function App() {
     setWordSearchFoundList(newFoundList);
   };
 
-  const openPrintViewInNewTab = () => {
+  const handlePrintClick = () => {
+    if (activeGameMode === "wordsearch") {
+      setWordSearchPrintPages(5); // Default to 5 pages
+      setIsPrintModalOpen(true);
+    } else {
+      executePrintView(1);
+    }
+  };
+
+  const executePrintView = (pages: number) => {
     setIsPrintModalOpen(false);
-    
-    // Get the HTML content of the print area
-    const printAreaLayout = document.getElementById('worksheet-print-area');
-    if (!printAreaLayout) return;
 
-    const printContent = printAreaLayout.innerHTML;
-
-    // Create a new window
+    // Create a new window safely first to avoid popup blockers
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       alert("សូមអនុញ្ញាត Pop-ups សម្រាប់គេហទំព័រនេះ ដើម្បីបើកផ្ទាំងបោះពុម្ព។");
       return;
     }
-
+    
     const isWordSearch = activeGameMode === "wordsearch";
     const isWordCard = activeGameMode === "wordcard";
+
+    if (isWordSearch) {
+       if (isNaN(pages) || pages <= 0) pages = 1;
+       if (pages > 20) pages = 20;
+       
+       const grids = [];
+       for (let i = 0; i < pages; i++) {
+          const generated = generateWordSearch(wordSearchList, 12);
+          const shuffledWords = [...generated.placedWords].sort(() => Math.random() - 0.5);
+          grids.push({ grid: generated.grid, placements: generated.placements, placedWords: shuffledWords });
+       }
+       
+       flushSync(() => {
+          setWordSearchPrintGrids(grids);
+       });
+    }
+
+    // Get the HTML content of the print area AFTER flushSync completes!
+    const printAreaLayout = document.getElementById('worksheet-print-area');
+    if (!printAreaLayout) {
+       printWindow.close();
+       return;
+    }
+
+    const printContent = printAreaLayout.innerHTML;
+
     const title = isWordCard
       ? "បណ្ណពាក្យអក្ខរាវិរុទ្ធនិងអំណានខ្មែរ (Khmer Word Cards)"
       : isWordSearch 
@@ -1284,10 +1332,10 @@ export default function App() {
           
           @media print {
             @page {
-              margin: 0.5cm;
+              margin: 0.5cm !important;
               size: A4;
             }
-            body { background: white; padding-top: 0 !important; }
+            body { background: white; padding: 0 !important; margin: 0 !important; }
             .no-print { display: none !important; }
             .print-container { box-shadow: none; margin: 0; padding: 0; max-width: none; border-radius: 0; }
             .print-container-cards { margin: 0 !important; padding: 0 !important; max-width: none !important; }
@@ -1299,17 +1347,22 @@ export default function App() {
             }
             .print-page {
               width: 100% !important;
-              min-height: 287mm !important; /* A4 (297mm) - Top/Bottom Margins (10mm) */
-              height: 100% !important;
-              padding: 0 !important;
+              height: 265mm !important;
+              min-height: 265mm !important;
+              max-height: 265mm !important;
+              padding: 0.5cm !important;
+              box-sizing: border-box !important;
               box-shadow: none !important;
               border-radius: 0 !important;
               border: none !important;
               page-break-after: always !important;
               page-break-inside: avoid !important;
               margin: 0 !important;
+              display: flex !important;
+              flex-direction: column !important;
               justify-content: space-between !important;
               aspect-ratio: auto !important;
+              overflow: hidden !important;
             }
             .print-page-card {
               height: 90mm !important;
@@ -1357,7 +1410,7 @@ export default function App() {
           </label>
         </div>
         ` : ''}
-        <div class="${isWordCard ? 'print-container-cards' : 'print-container'}">
+        <div class="print-container${isWordCard ? '-cards' : ''}" style="padding: 0.5cm; width: 100%; box-sizing: border-box;">
           ${printContent}
           ${isWordSearch ? `
             <div id="answer-key-content" style="display: none; text-align: center; margin-top: 40px; border-top: 2px dashed #cbd5e1; padding-top: 20px;">
@@ -2144,7 +2197,7 @@ export default function App() {
             title="នាឡិកាវាស់ពេល"
           >
             <Timer className={`w-4 h-4 ${timerRunning ? "text-rose-500 animate-pulse" : "text-slate-600"}`} />
-            <span className="hidden sm:inline">{timerSeconds > 0 && timerRunning ? `${Math.floor(timerSeconds / 60)}:${(timerSeconds % 60).toString().padStart(2, '0')}` : "នាឡិកា"}</span>
+            <span className="hidden sm:inline">{timerSeconds > 0 && timerRunning ? formatTimeHHMMSS(timerSeconds) : "នាឡិកា"}</span>
           </button>
 
           <button 
@@ -2156,7 +2209,7 @@ export default function App() {
             title="ម៉ាស៊ីនចាប់ពាក្យ (Slot)"
           >
             <ArrowUpDown className="w-4 h-4 text-indigo-600" />
-            <span className="hidden sm:inline">ចាប់ញាប់</span>
+            <span className="hidden sm:inline">ល្បែងអានពាក្យ</span>
           </button>
 
           <button 
@@ -2348,7 +2401,7 @@ export default function App() {
                     <button 
                       onClick={() => {
                         playClickSound(soundEnabled);
-                        openPrintViewInNewTab();
+                        handlePrintClick();
                         setSettingsMenuOpen(false);
                       }}
                       className="w-full flex items-center gap-3 p-2.5 hover:bg-slate-50 rounded-xl transition-colors text-left"
@@ -2751,7 +2804,7 @@ export default function App() {
             <button
               onClick={() => {
                 playClickSound(soundEnabled);
-                openPrintViewInNewTab();
+                handlePrintClick();
               }}
               className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 active:scale-[0.98] text-white py-4 px-5 rounded-[1.25rem] font-black shadow-lg shadow-orange-500/10 hover:shadow-orange-500/20 flex items-center justify-center gap-2 text-base transition-all cursor-pointer font-khmer"
             >
@@ -2844,14 +2897,13 @@ export default function App() {
   return (
     <div className={`${isImmersive ? "min-h-dvh md:h-dvh p-2 md:p-4 overflow-y-auto md:overflow-hidden" : "min-h-dvh py-6 px-4 md:px-8"} bg-blue-50/50 font-khmer text-slate-800 antialiased select-none flex flex-col justify-between`}>
       
-      {/* Timer Modal */}
       {isTimerOpen && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-200 p-4">
-          <div className="bg-white rounded-3xl md:rounded-[2.5rem] shadow-2xl w-full max-h-[95vh] md:max-w-4xl overflow-y-auto border border-slate-200 flex flex-col overflow-x-hidden relative">
-            <div className="bg-indigo-600 p-4 md:p-6 text-white flex justify-between items-center shrink-0 relative overflow-hidden">
-              <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] pointer-events-none"></div>
-              <h3 className="font-extrabold flex items-center gap-3 text-xl md:text-2xl relative z-10">
-                <Timer className="w-6 h-6 md:w-8 md:h-8 text-indigo-300" />
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/90 backdrop-blur-lg animate-in fade-in duration-200 p-4">
+          <div className="bg-slate-900 rounded-3xl md:rounded-[2.5rem] shadow-2xl w-full max-h-[95vh] md:max-w-4xl overflow-y-auto border border-slate-800 flex flex-col overflow-x-hidden relative">
+            <div className="bg-slate-950 border-b border-slate-800/80 p-4 md:p-6 text-white flex justify-between items-center shrink-0 relative overflow-hidden">
+              <div className="absolute inset-0 opacity-5 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] pointer-events-none"></div>
+              <h3 className="font-extrabold flex items-center gap-3 text-xl md:text-2xl relative z-10 text-slate-100">
+                <Timer className="w-6 h-6 md:w-8 md:h-8 text-sky-400 animate-pulse" />
                 នាឡិកាវាស់ពេល
               </h3>
               <button 
@@ -2859,44 +2911,181 @@ export default function App() {
                   playClickSound(soundEnabled);
                   setIsTimerOpen(false);
                 }}
-                className="text-white hover:bg-white/20 p-2 rounded-2xl transition-colors relative z-10"
+                className="text-slate-400 hover:text-white hover:bg-slate-800 p-2 rounded-2xl transition-colors relative z-10"
               >
                 <X className="w-7 h-7 md:w-8 md:h-8" />
               </button>
             </div>
             
-            <div className="flex-grow p-6 md:p-10 flex flex-col items-center justify-center bg-slate-50/50">
+            <div className="flex-grow p-6 md:p-10 flex flex-col items-center justify-center bg-slate-950">
               {isTimerActive ? (
                 <div className="flex flex-col items-center justify-center w-full">
-                  {/* Huge Timer Display */}
-                  <div className="relative w-[280px] h-[280px] sm:w-[350px] sm:h-[350px] md:w-[450px] md:h-[450px] flex items-center justify-center mb-8 md:mb-12 mx-auto shrink-0">
-                    <svg viewBox="0 0 400 400" className="w-full h-full transform -rotate-90 drop-shadow-lg">
-                      <circle cx="200" cy="200" r="180" className="stroke-slate-200" strokeWidth="20" fill="white" />
+                  {/* Huge Immersive Stopwatch Face */}
+                  <div className="relative w-[280px] h-[280px] sm:w-[350px] sm:h-[350px] md:w-[450px] md:h-[450px] flex items-center justify-center mb-8 md:mb-12 mx-auto shrink-0 shadow-[0_0_60px_rgba(14,165,233,0.15)] rounded-full border border-slate-805 bg-slate-950/40">
+                    <svg viewBox="0 0 400 400" className="w-full h-full drop-shadow-2xl">
+                      {/* Dark Outer Dial Base */}
+                      <circle cx="200" cy="200" r="185" className="fill-slate-950 stroke-slate-800" strokeWidth="3" />
+                      <circle cx="200" cy="200" r="178" className="fill-slate-950 stroke-slate-900" strokeWidth="1" />
+                      
+                      {/* Active Countdown/Countup Radial Progress Ring */}
                       <circle 
-                        cx="200" cy="200" r="180" 
-                        className={`transition-all duration-1000 linear ${timerCountUp ? 'stroke-sky-500' : (timerSeconds <= 10 ? 'stroke-rose-500' : 'stroke-indigo-500')} ${timerRunning ? 'animate-pulse' : ''}`}
-                        strokeWidth="20" fill="none" strokeLinecap="round" 
-                        strokeDasharray="1131" 
-                        strokeDashoffset={timerCountUp || timerMaxSeconds === 0 ? 0 : (1131 - (1131 * timerSeconds) / timerMaxSeconds || 0)} 
+                        cx="200" cy="200" r="178" 
+                        fill="none" 
+                        strokeWidth="5" 
+                        strokeLinecap="round" 
+                        strokeDasharray="1118" 
+                        strokeDashoffset={timerCountUp || timerMaxSeconds === 0 ? 0 : (1118 - (1118 * timerSeconds) / timerMaxSeconds || 0)} 
+                        className={`transition-all duration-1000 linear ${timerSeconds <= 10 && !timerCountUp ? 'stroke-rose-500' : 'stroke-sky-500'}`}
+                        transform="rotate(-90 200 200)"
+                        style={{ filter: "drop-shadow(0 0 5px rgba(14,165,233,0.5))" }}
                       />
+
+                      {/* Render Clock Face Dial Ticks and Labels dynamically */}
+                      {timerCountUp && Array.from({ length: 60 }).map((_, i) => {
+                        const angleDeg = i * 6;
+                        const angleRad = ((angleDeg - 90) * Math.PI) / 180;
+                        const isMajor = i % 5 === 0;
+                        
+                        const rOuter = 172;
+                        const rInner = isMajor ? 158 : 166;
+                        
+                        const x1 = 200 + rOuter * Math.cos(angleRad);
+                        const y1 = 200 + rOuter * Math.sin(angleRad);
+                        const x2 = 200 + rInner * Math.cos(angleRad);
+                        const y2 = 200 + rInner * Math.sin(angleRad);
+                        
+                        const rText = 140;
+                        const tx = 200 + rText * Math.cos(angleRad);
+                        const ty = 200 + rText * Math.sin(angleRad);
+                        const label = i === 0 ? "60" : i.toString();
+
+                        return (
+                          <g key={`timer-tick-${i}`}>
+                            <line
+                              x1={x1}
+                              y1={y1}
+                              x2={x2}
+                              y2={y2}
+                              stroke={isMajor ? "#f8fafc" : "rgba(148, 163, 184, 0.3)"}
+                              strokeWidth={isMajor ? "2.5" : "1"}
+                            />
+                            {isMajor && (
+                              <text
+                                x={tx}
+                                y={ty + 4}
+                                textAnchor="middle"
+                                className="text-[12px] font-sans font-black fill-slate-400 select-none pointer-events-none"
+                              >
+                                {label}
+                              </text>
+                            )}
+                          </g>
+                        );
+                      })}
+
+                      {/* Small Beautiful Sub-dial at 200, 275 representing elapsed/running minutes */}
+                      {timerCountUp && (
+                        <>
+                          <circle cx="200" cy="275" r="28" className="fill-transparent stroke-slate-800" strokeWidth="1" />
+                          {Array.from({ length: 12 }).map((_, idx) => {
+                            const angle = idx * 30;
+                            const rad = ((angle - 90) * Math.PI) / 180;
+                            const sx1 = 200 + 28 * Math.cos(rad);
+                            const sy1 = 275 + 28 * Math.sin(rad);
+                            const sx2 = 200 + (idx % 3 === 0 ? 22 : 25) * Math.cos(rad);
+                            const sy2 = 275 + (idx % 3 === 0 ? 22 : 25) * Math.sin(rad);
+                            return (
+                              <line 
+                                key={`sub-tick-${idx}`}
+                                x1={sx1} y1={sy1} x2={sx2} y2={sy2}
+                                stroke={idx % 3 === 0 ? "#94a3b8" : "#475569"}
+                                strokeWidth={idx % 3 === 0 ? "1.5" : "1"}
+                              />
+                            );
+                          })}
+                          {(() => {
+                            const subAngle = ((Math.floor(timerSeconds / 60) % 30) * 12) - 90;
+                            const subAngleRad = (subAngle * Math.PI) / 180;
+                            const subHandX = 200 + 21 * Math.cos(subAngleRad);
+                            const subHandY = 275 + 21 * Math.sin(subAngleRad);
+                            return (
+                              <g>
+                                <line x1="200" y1="275" x2={subHandX} y2={subHandY} className="stroke-sky-400 stroke-[1.5px]" strokeLinecap="round" />
+                                <circle cx="200" cy="275" r="3.5" className="fill-sky-450" />
+                                <circle cx="200" cy="275" r="1" className="fill-white" />
+                              </g>
+                            );
+                          })()}
+                        </>
+                      )}
+
+                      {/* Beautiful Mechanical/Electronic Sweep Second Hand pointing to seconds position */}
+                      {timerCountUp && (() => {
+                        const secondsAngle = ((timerSeconds % 60) * 6) - 90;
+                        const handAngleRad = (secondsAngle * Math.PI) / 180;
+                        const handX = 200 + 130 * Math.cos(handAngleRad);
+                        const handY = 200 + 130 * Math.sin(handAngleRad);
+                        return (
+                          <g>
+                            <line 
+                              x1="200" 
+                              y1="200" 
+                              x2={handX} 
+                              y2={handY} 
+                              className="stroke-sky-500 stroke-[2px]" 
+                              strokeLinecap="round" 
+                              style={{ filter: "drop-shadow(0 0 3px rgba(14,165,233,0.8))" }}
+                            />
+                            {/* Sweeping hand tail pivot accent overlay */}
+                            <circle cx="200" cy="200" r="7.5" className="fill-sky-500" style={{ filter: "drop-shadow(0 0 4px rgba(14,165,233,0.8))" }} />
+                            <circle cx="200" cy="200" r="2" className="fill-white" />
+                          </g>
+                        );
+                      })()}
                     </svg>
-                    <div className="absolute text-[5rem] sm:text-[6.5rem] md:text-[8rem] font-black font-mono text-slate-800 tabular-nums tracking-tighter drop-shadow-sm">
-                      {Math.floor(timerSeconds / 60)}:{(timerSeconds % 60).toString().padStart(2, '0')}
+
+                    {/* Futuristic center digital time overlay inside the circular block */}
+                    <div className="absolute flex flex-col items-center justify-center select-none pointer-events-none">
+                      <div className="text-[2.6rem] sm:text-[3.2rem] md:text-[4.2rem] font-sans font-black tracking-normal tabular-nums leading-none flex items-center">
+                        {timerCountUp ? (
+                          <>
+                            <span className="text-slate-100">
+                              {Math.floor(timerSeconds / 60).toString().padStart(2, '0')}:
+                              {Math.floor(timerSeconds % 60).toString().padStart(2, '0')}.
+                            </span>
+                            <span className="text-sky-400 drop-shadow-[0_0_10px_rgba(56,189,248,0.75)]">
+                              {Math.floor((timerSeconds % 1) * 100).toString().padStart(2, '0')}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-slate-100">
+                              {Math.floor(timerSeconds / 3600).toString().padStart(2, '0')}:
+                              {Math.floor((timerSeconds % 3600) / 60).toString().padStart(2, '0')}:
+                            </span>
+                            <span className="text-sky-400 drop-shadow-[0_0_10px_rgba(56,189,248,0.75)]">
+                              {Math.floor(timerSeconds % 60).toString().padStart(2, '0')}
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                   
-                  {/* Timer Controls */}
+                  {/* Timer Controls with Neon/Slate aesthetic */}
                   <div className="flex items-center gap-6">
                     <button
                       onClick={() => {
                         playClickSound(soundEnabled);
                         setTimerRunning(!timerRunning)
                       }}
-                      className={`w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center shadow-xl transition-transform active:scale-95 ${
-                        timerRunning ? "bg-white text-rose-600 border-[4px] border-rose-100" : (timerCountUp ? "bg-sky-500 text-white shadow-sky-200" : "bg-indigo-600 text-white shadow-indigo-200")
+                      className={`w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center transition-all duration-300 active:scale-95 ${
+                        timerRunning 
+                          ? "bg-slate-900 text-rose-500 border-2 border-slate-800 hover:bg-slate-800 hover:border-slate-700/80 [filter:drop-shadow(0_0_15px_rgba(244,63,94,0.15))]" 
+                          : "bg-sky-500 text-white hover:bg-sky-400 [filter:drop-shadow(0_0_15px_rgba(14,165,233,0.35))]"
                       }`}
                     >
-                      {timerRunning ? <Pause className="w-8 h-8 md:w-10 md:h-10 fill-rose-600" /> : <Play className="w-8 h-8 md:w-10 md:h-10 fill-white translate-x-1" />}
+                      {timerRunning ? <Pause className="w-8 h-8 md:w-10 md:h-10 fill-rose-500" /> : <Play className="w-8 h-8 md:w-10 md:h-10 fill-white translate-x-1" />}
                     </button>
                     <button
                       onClick={() => {
@@ -2904,9 +3093,10 @@ export default function App() {
                         setTimerRunning(false);
                         setTimerSeconds(timerCountUp ? 0 : timerMaxSeconds);
                       }}
-                      className="w-14 h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center bg-white border-[3px] border-slate-100 text-slate-600 hover:bg-slate-50 transition-colors shadow-md active:scale-95"
+                      className="w-14 h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-md active:scale-95"
+                      title="កំណត់ឡើងវិញ"
                     >
-                      <RotateCcw className="w-6 h-6 md:w-7 md:h-7 text-slate-500" />
+                      <RotateCcw className="w-6 h-6 md:w-7 md:h-7 text-slate-400" />
                     </button>
                     <button
                       onClick={() => {
@@ -2914,38 +3104,49 @@ export default function App() {
                         setTimerRunning(false);
                         setIsTimerActive(false);
                       }}
-                      className="w-14 h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center bg-white border-[3px] border-slate-100 text-slate-600 hover:bg-slate-50 transition-colors shadow-md active:scale-95"
+                      className="w-14 h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-md active:scale-95"
                       title="ថយក្រោយ"
                     >
-                      <X className="w-6 h-6 md:w-7 md:h-7 text-slate-500" />
+                      <X className="w-6 h-6 md:w-7 md:h-7 text-slate-400" />
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center w-full max-w-2xl mx-auto py-6">
-                  <Timer className="w-16 h-16 md:w-20 md:h-20 text-indigo-200 mb-4 drop-shadow-sm" />
-                  <h2 className="text-xl md:text-3xl font-extrabold text-slate-800 mb-3 text-center">កំណត់ពេលវេលា</h2>
-                  <p className="text-sm md:text-base text-slate-500 mb-8 text-center">បញ្ចូលនាទី និងវិនាទី (ឧទាហរណ៍ ០៥:០០)</p>
+                  <Timer className="w-16 h-16 md:w-20 md:h-20 text-sky-400 mb-4 drop-shadow-[0_0_10px_rgba(56,189,248,0.35)]" />
+                  <h2 className="text-xl md:text-3xl font-extrabold text-slate-100 mb-3 text-center">កំណត់ពេលវេលា</h2>
+                  <p className="text-sm md:text-base text-slate-400 mb-8 text-center">បញ្ចូលម៉ោង នាទី និងវិនាទី (ឧទាហរណ៍ ០០:០៥:០០)</p>
                   
-                  <div className="bg-white p-6 md:p-8 rounded-3xl md:rounded-[2rem] shadow-xl border border-slate-100 w-full mb-8 text-center relative">
+                  <div className="bg-slate-900 p-6 md:p-8 rounded-3xl md:rounded-[2rem] border border-slate-800 w-full mb-8 text-center relative shadow-2xl">
                     <input
                       type="text"
                       value={timerInputStr}
                       onChange={(e) => {
                         let val = e.target.value.replace(/[^0-9:]/g, '');
-                        if (val.length === 2 && !val.includes(':') && timerInputStr.length < val.length) {
+                        if ((val.length === 2 || val.length === 5) && !val.endsWith(':') && timerInputStr.length < val.length) {
                            val += ':';
                         }
-                        if (val.length <= 5) setTimerInputStr(val);
+                        if (val.length <= 8) setTimerInputStr(val);
                       }}
                       onBlur={() => {
-                        if (!timerInputStr.includes(':')) {
-                           const num = parseInt(timerInputStr || '0');
-                           if (!isNaN(num)) setTimerInputStr(`${num.toString().padStart(2, '0')}:00`);
+                        const parts = timerInputStr.split(':').filter(Boolean);
+                        let h = 0, m = 5, s = 0;
+                        if (parts.length === 1) {
+                          m = parseInt(parts[0]) || 5;
+                        } else if (parts.length === 2) {
+                          m = parseInt(parts[0]) || 0;
+                          s = parseInt(parts[1]) || 0;
+                        } else if (parts.length >= 3) {
+                          h = parseInt(parts[0]) || 0;
+                          m = parseInt(parts[1]) || 0;
+                          s = parseInt(parts[2]) || 0;
                         }
+                        setTimerInputStr(
+                          `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+                        );
                       }}
-                      placeholder="05:00"
-                      className="w-full sm:w-64 md:w-80 text-center text-5xl md:text-6xl lg:text-7xl font-extrabold font-mono text-indigo-900 bg-indigo-50/50 border-4 border-indigo-100 rounded-3xl py-4 focus:outline-none focus:border-indigo-400 focus:bg-white transition-all drop-shadow-sm placeholder:text-indigo-200"
+                      placeholder="00:05:00"
+                      className="w-full sm:w-64 md:w-80 text-center text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-extrabold font-mono text-sky-400 bg-slate-950/80 border-4 border-slate-800 rounded-3xl py-4 focus:outline-none focus:border-sky-500 focus:bg-slate-950 transition-all drop-shadow-sm placeholder:text-slate-800"
                     />
                   </div>
 
@@ -2955,9 +3156,9 @@ export default function App() {
                         key={`preset-${min}`}
                         onClick={() => {
                           playClickSound(soundEnabled);
-                          setTimerInputStr(`${min.toString().padStart(2, '0')}:00`);
+                          setTimerInputStr(`00:${min.toString().padStart(2, '0')}:00`);
                         }}
-                        className="px-4 py-2 md:px-6 md:py-3 bg-white border-2 border-slate-200 text-slate-600 rounded-2xl text-base md:text-xl font-bold hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600 shadow-sm active:scale-95 transition-all"
+                        className="px-4 py-2 md:px-6 md:py-3 bg-slate-900 border-2 border-slate-800 text-slate-300 rounded-2xl text-base md:text-xl font-bold hover:bg-slate-800 hover:border-sky-500 hover:text-sky-400 shadow-sm active:scale-95 transition-all"
                       >
                         {min} នាទី
                       </button>
@@ -2968,19 +3169,29 @@ export default function App() {
                     <button
                       onClick={() => {
                         playClickSound(soundEnabled);
+                        let hrs = 0;
                         let mins = 5;
                         let secs = 0;
                         if (timerInputStr.includes(':')) {
                            const parts = timerInputStr.split(':');
-                           mins = parseInt(parts[0] || '0');
-                           secs = parseInt(parts[1] || '0');
+                           if (parts.length === 3) {
+                             hrs = parseInt(parts[0] || '0');
+                             mins = parseInt(parts[1] || '0');
+                             secs = parseInt(parts[2] || '0');
+                           } else if (parts.length === 2) {
+                             mins = parseInt(parts[0] || '0');
+                             secs = parseInt(parts[1] || '0');
+                           } else {
+                             mins = parseInt(parts[0] || '5');
+                           }
                         } else {
                            mins = parseInt(timerInputStr || '5');
                         }
+                        if (isNaN(hrs)) hrs = 0;
                         if (isNaN(mins)) mins = 5;
                         if (isNaN(secs)) secs = 0;
                         
-                        const totalSecs = (mins * 60) + secs;
+                        const totalSecs = (hrs * 3600) + (mins * 60) + secs;
                         const finalSecs = totalSecs > 0 ? totalSecs : 300;
                         setTimerMaxSeconds(finalSecs);
                         setTimerSeconds(finalSecs);
@@ -2988,7 +3199,7 @@ export default function App() {
                         setTimerRunning(true);
                         setIsTimerActive(true);
                       }}
-                      className="bg-indigo-600 text-white font-black text-lg md:text-xl py-4 px-6 md:py-5 md:px-8 rounded-3xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-3 w-full"
+                      className="bg-sky-500 text-white hover:bg-sky-400 font-extrabold text-lg md:text-xl py-4 px-6 md:py-5 md:px-8 rounded-3xl shadow-xl hover:-translate-y-0.5 active:scale-95 transition-all flex items-center justify-center gap-3 w-full"
                     >
                       <Play className="w-5 h-5 md:w-6 md:h-6 fill-white" />
                       រាប់ថយក្រោយ
@@ -3003,7 +3214,7 @@ export default function App() {
                         setTimerRunning(true);
                         setIsTimerActive(true);
                       }}
-                      className="bg-sky-500 text-white font-black text-lg md:text-xl py-4 px-6 md:py-5 md:px-8 rounded-3xl shadow-xl hover:bg-sky-600 active:scale-95 transition-all flex items-center justify-center gap-3 w-full"
+                      className="bg-slate-800 border-2 border-slate-705 hover:bg-slate-700 text-slate-100 font-extrabold text-lg md:text-xl py-4 px-6 md:py-5 md:px-8 rounded-3xl shadow-xl hover:-translate-y-0.5 active:scale-95 transition-all flex items-center justify-center gap-3 w-full"
                     >
                       <Play className="w-5 h-5 md:w-6 md:h-6 fill-white" />
                       រាប់ទៅមុខ
@@ -3024,7 +3235,7 @@ export default function App() {
             <div className="absolute top-4 left-4 right-4 z-[110] flex items-center justify-between">
               <div className="flex items-center gap-2 bg-slate-50 px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
                 <ArrowUpDown className="w-5 h-5 text-indigo-500" />
-                <span className="font-bold text-slate-700">ចាប់ញាប់ (Slot)</span>
+                <span className="font-bold text-slate-700">ល្បែងអានពាក្យ</span>
               </div>
 
               <div className="flex items-center gap-2">
@@ -3075,7 +3286,7 @@ export default function App() {
                     className="w-full max-w-sm flex text-2xl md:text-3xl items-center justify-center gap-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-6 px-8 rounded-[2.5rem] shadow-[0_12px_40px_rgba(0,0,0,0.18)] transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none disabled:transform-none mt-8 group"
                   >
                     <ArrowUpDown className="w-8 h-8 md:w-10 md:h-10 group-hover:scale-110 transition-transform" />
-                    ចាប់ញាប់ (Start)
+                    ចាប់ផ្ដើម
                   </button>
                   
                   <p className="text-center text-slate-500 text-base md:text-lg font-bold mt-4">
@@ -3794,7 +4005,7 @@ export default function App() {
                   <ArrowUpDown className="w-6 h-6 md:w-9 md:h-9 text-indigo-500" />
                 </div>
                 <div>
-                  <h3 className="text-sm md:text-lg font-extrabold text-slate-800">ចាប់ញាប់ (Slot)</h3>
+                  <h3 className="text-sm md:text-lg font-extrabold text-slate-800">ល្បែងអានពាក្យ</h3>
                   <p className="hidden md:block text-[11px] text-slate-500 mt-1">ជ្រើសរើសចៃដន្យបែប Slot</p>
                 </div>
               </button>
@@ -5613,6 +5824,61 @@ export default function App() {
         </div>
       )}
 
+      {/* MODAL: Print Options for Word Search */}
+      {isPrintModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-xl border border-slate-100 max-w-sm w-full animate-in zoom-in-95 duration-200">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
+                <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                  <Printer className="w-5 h-5 text-indigo-600" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-800 font-khmer">ឆ្នៃសន្លឹកកិច្ចការ</h3>
+              </div>
+
+              <div className="space-y-4 mb-8">
+                <label className="block text-sm font-bold text-slate-700 font-khmer leading-relaxed">
+                  ចំនួនសន្លឹកកិច្ចការ (ទាញយកម្តងបានច្រើនសន្លឹកដោយពាក្យដដែល តែប្តូរទីតាំងចុះឡើងជារាងរហូត)៖
+                </label>
+                <div className="flex items-center justify-between border-2 border-indigo-100 rounded-xl p-2 bg-slate-50">
+                   <button 
+                     onClick={() => setWordSearchPrintPages(Math.max(1, wordSearchPrintPages - 1))}
+                     className="w-12 h-12 rounded-lg bg-white border border-slate-200 text-slate-600 font-xl flex items-center justify-center shadow-sm hover:bg-slate-50 active:scale-95"
+                   >
+                     -
+                   </button>
+                   <span className="text-2xl font-black text-indigo-700 tabular-nums">
+                     {wordSearchPrintPages}
+                   </span>
+                   <button 
+                     onClick={() => setWordSearchPrintPages(Math.min(20, wordSearchPrintPages + 1))}
+                     className="w-12 h-12 rounded-lg bg-white border border-slate-200 text-slate-600 font-xl flex items-center justify-center shadow-sm hover:bg-slate-50 active:scale-95"
+                   >
+                     +
+                   </button>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setIsPrintModalOpen(false)}
+                  className="flex-1 py-3 px-4 bg-white border-2 border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-colors"
+                >
+                  បោះបង់
+                </button>
+                <button
+                  onClick={() => executePrintView(wordSearchPrintPages)}
+                  className="flex-1 py-3 px-4 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-600/30 transition-all active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>ទាញយក</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: MCQ Countdown Overlay */}
       {mcCountdown !== null && mcCountdown >= 0 && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[120] flex flex-col items-center justify-center animate-in fade-in duration-200">
@@ -5702,7 +5968,7 @@ export default function App() {
       )}
 
       {/* PRINT-ONLY AREA: HIDDEN ON SCREENS, VISIBLE ON printer paper */}
-      <div id="worksheet-print-area" className={`hidden print:block ${activeGameMode === "wordcard" ? "p-0" : "p-8"} bg-white text-slate-900 border-none font-khmer`}>
+      <div id="worksheet-print-area" className={`hidden print:block ${activeGameMode === "wordcard" ? "p-0" : "p-[0.5cm]"} bg-white text-slate-900 border-none font-khmer`}>
         
         {activeGameMode === "wordcard" ? (
           <div className="flex flex-col w-full gap-0 bg-transparent">
@@ -5788,35 +6054,8 @@ export default function App() {
               ));
             })()}
           </div>
-        ) : activeGameMode === "wordsearch" ? (
-          <div className="flex flex-col w-full mb-6">
-            <div className="flex justify-between items-center border-b-[3px] border-amber-500 pb-4 mb-8 font-khmer">
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-amber-500 rounded-[20px] flex items-center justify-center shadow-lg shrink-0">
-                  <Sparkles className="w-7 h-7 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-xl md:text-2xl text-slate-800 font-khmer font-black leading-tight mb-2">
-                    ល្បែងស្វែងរកពាក្យខ្មែរ
-                  </h1>
-                  <p className="text-xs text-slate-500 font-medium">
-                    រាវរកទីតាំងពាក្យដែលលាក់នៅក្នុងតារាងអក្សរ
-                  </p>
-                </div>
-              </div>
-              <div className="text-right text-xs space-y-1.5 text-slate-800">
-                <p>ឈ្មោះសិស្ស ៖ {studentName ? studentName : "......................................"}</p>
-                <p>កាលបរិច្ឆេទ ៖ ......../........./...........</p>
-              </div>
-            </div>
-
-            <div className="text-center w-full mb-4 px-4 font-khmer">
-              <p className="text-sm text-slate-700 max-w-3xl mx-auto leading-relaxed">
-                <strong>ការណែនាំ៖</strong> ចូរលោកគ្រូ-អ្នកគ្រូឱ្យសិស្សស្វែងរកពាក្យគន្លឹះខ្មែរទាំងឡាយដែលបានផ្ដល់ជូនខាងក្រោម នៅក្នុងប្រអប់តារាងអក្សរ ដោយគូសរង្វង់ព័ទ្ធជុំវិញតាមទីតាំងដេក (ឆ្វេងទៅស្តាំ) ឬបញ្ឈរ (លើចុះក្រោម)។
-              </p>
-            </div>
-          </div>
-        ) : activeGameMode === "spelling" ? (
+        ) : activeGameMode === "wordsearch" ? null
+          : activeGameMode === "spelling" ? (
           <div className="w-full mb-6 font-khmer">
             <div className="flex justify-between items-center border-b-[3px] border-indigo-600 pb-4 mb-8 font-khmer">
               <div className="flex items-center gap-4">
@@ -5863,55 +6102,87 @@ export default function App() {
         )}
 
         {activeGameMode === "wordsearch" ? (
-          <div className="space-y-8">
-            <div className="flex justify-center w-full">
-              <div className="w-full max-w-[640px] border-[3px] border-slate-800 bg-white">
-                <div 
-                  className="grid gap-0 w-full"
-                  style={{ 
-                    gridTemplateColumns: `repeat(${wordSearchGrid.length || 12}, minmax(0, 1fr))`
-                  }}
-                >
-                  {wordSearchGrid.map((row, r) => 
-                    row.map((val, c) => {
-                      let answerClasses = "";
-                      Object.entries(wordSearchPlacements).forEach(([word, coords]) => {
-                        if ((coords as { r: number, c: number }[]).some(coord => coord.r === r && coord.c === c)) {
-                           const colorCls = PASTEL_COLORS[wordSearchList.indexOf(word) % PASTEL_COLORS.length];
-                           answerClasses = colorCls; 
-                        }
-                      });
+          (wordSearchPrintGrids.length > 0 ? wordSearchPrintGrids : [{ grid: wordSearchGrid, placements: wordSearchPlacements }]).map((gridData, pageIdx, arr) => (
+            <div key={`ws-page-${pageIdx}`} className="print-page relative bg-white mx-auto flex flex-col justify-start" style={pageIdx < arr.length - 1 ? { pageBreakAfter: "always", padding: "1cm" } : { padding: "1cm" }}>
+              <div className="flex flex-col w-full mb-4">
+                <div className="flex justify-between items-center border-b-[3px] border-amber-500 pb-2 mb-3 font-khmer">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-amber-500 rounded-2xl flex items-center justify-center shadow-lg shrink-0">
+                      <Sparkles className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h1 className="text-xl md:text-2xl text-slate-800 font-khmer font-black leading-tight mb-1">
+                        ល្បែងស្វែងរកពាក្យខ្មែរ
+                      </h1>
+                      <p className="text-xs text-slate-500 font-medium">
+                        រាវរកទីតាំងពាក្យដែលលាក់នៅក្នុងតារាងអក្សរ
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right text-xs space-y-1 text-slate-800">
+                    <p>ឈ្មោះសិស្ស ៖ {studentName ? studentName : "......................................"}</p>
+                    <p>កាលបរិច្ឆេទ ៖ ......../........./...........</p>
+                  </div>
+                </div>
 
-                      return (
-                        <div 
-                          key={`print-cell-${r}-${c}`}
-                          className="worksheet-cell aspect-square flex items-center justify-center font-khmer text-[19px] border border-slate-400 bg-white"
-                          data-answer-colors={answerClasses}
-                        >
-                          {val}
-                        </div>
-                      )
-                    })
-                  )}
+                <div className="text-center w-full mb-1 px-2 font-khmer">
+                  <p className="text-xs text-slate-700 max-w-4xl mx-auto leading-relaxed">
+                    <strong>ការណែនាំ៖</strong> ចូរលោកគ្រូ-អ្នកគ្រូឱ្យសិស្សស្វែងរកពាក្យគន្លឹះខ្មែរទាំងឡាយដែលបានផ្ដល់ជូនខាងក្រោម នៅក្នុងប្រអប់តារាងអក្សរ ដោយគូសរង្វង់ព័ទ្ធជុំវិញតាមទីតាំងដេក (ឆ្វេងទៅស្តាំ) ឬបញ្ឈរ (លើចុះក្រោម)។
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4 print:space-y-3 flex-grow flex flex-col justify-between">
+                <div className="flex justify-center w-full">
+                  <div className="w-full max-w-[18.5cm] mx-auto border-2 border-slate-700 bg-white shadow-xs">
+                    <div 
+                      className="grid gap-0 w-full"
+                      style={{ 
+                        gridTemplateColumns: `repeat(${gridData.grid.length || 12}, minmax(0, 1fr))`
+                      }}
+                    >
+                      {gridData.grid.map((row, r) => 
+                        row.map((val, c) => {
+                          let answerClasses = "";
+                          Object.entries(gridData.placements).forEach(([word, coords]) => {
+                            if ((coords as { r: number, c: number }[]).some(coord => coord.r === r && coord.c === c)) {
+                               const colorCls = PASTEL_COLORS[wordSearchList.indexOf(word) % PASTEL_COLORS.length];
+                               answerClasses = colorCls; 
+                            }
+                          });
+
+                          return (
+                            <div 
+                              key={`print-cell-${r}-${c}`}
+                              className="worksheet-cell aspect-square flex items-center justify-center font-khmer font-bold text-[28px] border border-slate-700 bg-white min-h-[32px]"
+                              data-answer-colors={answerClasses}
+                            >
+                              {val}
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="w-full max-w-[18cm] mx-auto page-break-inside-avoid mt-5 print:mt-3">
+                  <h4 className="text-[17px] font-bold font-khmer text-slate-800 mb-4 flex items-center gap-3">
+                    <Check className="w-5 h-5 text-slate-800 stroke-[3px]" />
+                    បញ្ជីពាក្យត្រូវស្វែងរកទាំង {toKhmerNumeral((gridData.placedWords || wordSearchList).length)}៖
+                  </h4>
+                  <ul className="grid grid-cols-4 gap-x-6 gap-y-3">
+                    {(gridData.placedWords || wordSearchList).map((word, i) => (
+                      <li key={`print-word-${i}`} className="flex items-center gap-2 text-slate-800 overflow-hidden text-ellipsis whitespace-nowrap">
+                        <div className="w-5 h-5 border-[1.5px] border-slate-800 bg-white shrink-0"></div>
+                        <span className="font-bold font-khmer text-[15px] leading-tight block truncate md:text-md text-slate-800">{word}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
             </div>
-
-            <div className="w-full max-w-[640px] mx-auto page-break-inside-avoid">
-              <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <Check className="w-5 h-5 text-slate-600" />
-                បញ្ជីពាក្យត្រូវស្វែងរកទាំង {wordSearchList.length}៖
-              </h4>
-              <ul className="grid grid-rows-2 grid-flow-col gap-x-8 gap-y-4">
-                {wordSearchList.map((word, i) => (
-                  <li key={`print-word-${i}`} className="flex items-center gap-3 text-slate-800 text-lg">
-                    <div className="w-5 h-5 border-2 border-slate-400 rounded-sm shrink-0"></div>
-                    <span className="font-semibold">{word}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
+          ))
         ) : activeGameMode === "spelling" ? (
           <div className="space-y-6">
             {challenges.map((c, index) => (
